@@ -1,0 +1,197 @@
+#!/usr/bin/perl
+
+# $Surreal: pfloghtml,v 1.14 2010/01/19 14:05:47 mitya Exp $
+#
+# Copyright (c) 2009, 2010 Dmitry Alenichev <mitya@sdf.lonestar.org>
+#
+# Permission to use, copy, modify, and distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+use strict;
+use warnings;
+
+# html files will be created here
+my $htmldir = "/var/www/htdocs/pflog/";
+
+my $hostname = `hostname`;
+chomp($hostname);
+
+my $lines = 0;
+my $pages = 0;
+
+my ($month, $day, $time, $rule, $action, $param, $iface, $src, $dst, @srcip,
+    @dstip, $dport, $fp, @rules, $i, @log, $logline);
+
+my $top = "<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\">
+<html>
+<head>
+<meta http-equiv=\"Content-type\" content=\"text/html;charset=iso-8859-1\">
+<meta http-equiv=\"Cache-control\" content=\"no-cache\">
+<meta http-equiv=\"Pragma\" content=\"no-cache\">
+<meta http-equiv=\"Refresh\" content=\"300\">
+<title>Packet Filter Log</title>
+<style type=\"text/css\">
+body {
+	font-family: Verdana, Helvetica, Arial;
+}
+table {
+	background-color: #efefef;
+	text-align: center;
+	font-size: 80%;
+}
+tr.header {
+	background-color: #c0c0c0;
+}
+tr.links {
+	background-color: #c0c0c0;
+	text-align: right;
+}
+</style>
+</head>\n
+<body>
+<div style=\"font-weight: bold;\">Packet Filter Log</div>
+<div style=\"font-size: 80%;\">for $hostname</div>\n";
+
+my $table_top = "<table cellspacing=\"1\" cellpadding=\"2\" border=\"0\">
+<tr class=\"header\">
+  <th>Date</th>
+  <th>Rule</th>
+  <th>Action</th>
+  <th>Iface</th>
+  <th>Source</th>
+  <th>Destination</th>
+  <th>Service</th>
+</tr>\n";
+
+my $row = "  <td>%d %s %.8s</td><td><abbr title=\"%s\">%s</abbr></td>
+  <td>%s %s</td><td>%s</td><td>%d.%d.%d.%d</td><td>%d.%d.%d.%d</td>
+  <td>%d</td>\n</tr>\n";
+    
+my $link = "<a href=\"%s\">next</a>";
+
+sub html_end($)
+{
+	print $fp "</table>\n";
+	print $fp "<img src=\"pfloghtml.png\" alt=\"[pfloghtml logo]\">\n";
+	print $fp "</body>\n";
+	print $fp "</html>\n";
+
+	close($fp);
+}
+
+# pipe pf rules into perl
+open(PF_RULES, "/sbin/pfctl -vvsr | grep ^\@ | ") or die $!;
+$i = 0;
+while (<PF_RULES>) {
+	chomp($_);
+	$rules[$i] = substr $_, 3;
+	$i++;
+}
+close(PF_RULES);
+
+# pipe reverse sorted log into perl
+open(LOG, "tcpdump -netttr /var/log/pflog | ") or die $!;
+@log = <LOG>;
+foreach $logline (reverse @log) {
+	chomp $logline;
+	$logline =~ s/rule//;
+	$logline =~ s/on//;
+	$logline =~ s/\> //;
+
+	($month, $day, $time, $rule, $action, $param, $iface, $src,
+	    $dst) = split(' ', $logline);
+
+	@srcip = split(/\./, $src, 4);
+	($dst) = split(':', $dst);
+	($dstip[0], $dstip[1], $dstip[2], $dstip[3], $dport) = 
+	    split(/\./, $dst);
+	$rule =~ s/\/\(match\)//;
+
+	# html pages separation code
+	if ($lines % 20 == 0) {
+		if ($lines != 0) {
+			print $fp "<tr class=\"links\">\n";
+			print $fp "  <td colspan=\"7\">";
+			if ($pages != 0) {
+				if ($pages == 1) {
+					printf $fp $link." | ", "index.html";
+				} else {
+					printf $fp $link." | ",
+					    "index_".($pages - 1).".html";
+				}
+			}
+			print $fp "<a href=\"pages.html\">pages</a> | ";
+			print $fp "<a href=\"index_".($pages + 1).
+			    ".html\">previous</a></td>\n</tr>\n";
+			html_end($fp);
+			$pages++;
+		}
+
+		if ($pages == 0) {
+			open($fp, '>', $htmldir."index.html") or die $!;
+		} else {
+			open($fp, '>', $htmldir."index_".$pages.".html")
+			    or die $!;
+		}
+
+		print $fp $top, $table_top;
+	}
+
+	# odd/even records color
+	if ($lines % 2 == 1) {
+		printf $fp "<tr style=\"background-color: #ffffff\">\n";
+	} else {
+		printf $fp "<tr>\n";
+	}
+
+	# print formated log entry
+	if (!$dport) {
+		printf $fp $row, $day, $month, $time, $rules[$rule], $rule,
+		    $action, $param, split(':', $iface), $srcip[0], $srcip[1],
+		    $srcip[2], $srcip[3], $dstip[0], $dstip[1], $dstip[2],
+		    $dstip[3], "0";
+	} else {
+		printf $fp $row, $day, $month, $time, $rules[$rule], $rule,
+		    $action, $param, split(':', $iface), $srcip[0], $srcip[1],
+		    $srcip[2], $srcip[3], $dstip[0], $dstip[1], $dstip[2],
+		    $dstip[3], $dport;
+	}
+
+	$lines++;
+}
+close(LOG);
+
+# make last page looks nice
+if ($pages > 1) {
+	print $fp "<tr class=\"links\">\n";
+	print $fp "  <td colspan=\"7\">\n";
+	print $fp "    <a href=\"index_".($pages - 1).".html\">next</a> | \n";
+	print $fp "    <a href=\"pages.html\">pages</a>\n";
+	print $fp "  </td>\n";
+	print $fp "</tr>\n";
+}
+
+html_end($fp);
+
+# generate pages index
+open($fp, '>', $htmldir."pages.html") or die $!;
+print $fp $top;
+print $fp "<p>[\n";
+print $fp "  <a href=\"index.html\">0</a>";
+for ($i = 1; $i <= $pages; $i++) {
+	print $fp " | \n";
+	print $fp "  <a href=\"index_".$i.".html\">".$i."</a>";
+}
+print $fp " ]</p>\n";
+print $fp "</body>\n";
+print $fp "</html>\n";
+close($fp);
